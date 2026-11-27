@@ -237,8 +237,6 @@ enum Ping {
     // 防御：若 IP_STRIPHDR 未生效，IPv4 收包会带 IP 头，按 ihl 跳过
     if family == .v4, buffer[0] >> 4 == 4 {
       base = Int(buffer[0] & 0x0f) * 4
-
-      guard count >= base + 8 else { return nil }
     }
 
     let type = buffer[base]
