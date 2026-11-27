@@ -23,11 +23,11 @@ IPv6  2400:3200::1   →  最佳 MTU: 1500（ICMP payload 1452，共 9 次探测
 | ⏱ **自适应超时** | 基线 RTT 测得后，单次等待收紧为 `5×已见最大 RTT + 100ms`，静默丢包路径上每次失败代价从秒级降到百毫秒级 |
 | 📨 **ICMP 差错直接收敛** | 收到 frag needed / Packet Too Big 时，直接按报文携带的下一跳 MTU 收缩上界，有差错回包的路径一步逼近答案 |
 | 🎯 **出口接口 MTU 自动定位** | UDP `connect`（不发包）让内核选路，`getsockname` + `getifaddrs` 反查出口接口，无关 VPN utun / 巨帧桥接不会抬高搜索上限 |
-| 🌐 **IPv4 / IPv6 双栈** | 两族并发探测（`async let`），正确处理 DF 位、IPv6 天然不分片、源端分片等协议细节 |
-| 📦 **库 / CLI 分层** | 核心逻辑在 `MTUProbeCore` 库 target（macOS 13+ / iOS 13+），CLI 只是薄壳；`ProbeResult` 为 `Codable & Sendable` |
+| 🌐 **IPv4 / IPv6 双栈** | 两族并发探测（`Task`），正确处理 DF 位、IPv6 天然不分片、源端分片等协议细节 |
+| 📦 **库 / CLI 分层** | 核心逻辑在 `MTUProbeCore` 库 target（macOS 13+ / iOS 13+），CLI 只是薄壳；`ProbeResult` 为 `Codable & Sendable`，`probeMTU` 的探测 / 日志依赖可注入，无需真实网络即可单测 |
 | 🔧 **脚本友好** | 进度走 stderr、结果走 stdout；`human` / `json`(NDJSON) / `tsv` / `value` 四种输出格式 + 明确退出码 |
 
-全部实现约 **860 行 Swift**，仅依赖系统框架（Darwin / Dispatch / Foundation）。
+全部实现约 **1300 行 Swift**（另有约 300 行单元测试），仅依赖系统框架（Darwin / Dispatch / Foundation）。
 
 ## 快速开始
 
@@ -36,6 +36,7 @@ git clone https://github.com/cntrump/mtu_probe.git
 cd mtu_probe
 swift build -c release
 .build/release/mtu-probe            # 探测默认目标
+swift test                          # 单元测试（注入模拟路径，无需真实网络）
 ```
 
 ## 常用选项
@@ -149,13 +150,20 @@ let results = await [v4, v6]   // ProbeResult: Codable，含 bestMTU / payload /
 
 ```
 Sources/
-├── MTUProbeCore/          # 核心库（macOS 13+ / iOS 13+）
-│   ├── Probe.swift        # 搜索策略：基准点 + 并发二分、自适应超时、重试
-│   ├── ICMPSocket.swift   # 非特权 ICMP 套接字、DF 位、差错报文解析
-│   ├── InterfaceMTU.swift # 出口接口定位（UDP connect + getifaddrs）
-│   └── IPFamily.swift     # IPv4 / IPv6 协议常量
-└── MTUProbe/              # CLI 薄壳：参数解析、输出格式、退出码
-    └── MTUProbe.swift
+├── MTUProbeCore/               # 核心库（macOS 13+ / iOS 13+）
+│   ├── Probe.swift             # 搜索策略：基准点 + 并发二分、自适应超时、重试（send / log 可注入）
+│   ├── SearchInterval.swift    # 搜索区间不变量与收缩逻辑（含 ICMP 差错通告 hint）
+│   ├── ICMPSocket.swift        # 非特权 ICMP 套接字、DF 位；报文构造 / 解析 / 校验和为纯函数
+│   ├── AddressResolver.swift   # 共享地址解析入口（getaddrinfo 平台陷阱单点维护）
+│   ├── InterfaceMTU.swift      # 出口接口定位（UDP connect 让内核选路）
+│   ├── InterfaceSnapshot.swift # getifaddrs 接口快照，活跃接口策略单点定义
+│   └── IPFamily.swift          # IPv4 / IPv6 协议族常量与行为的单点来源
+└── MTUProbe/                   # CLI 薄壳
+    ├── MTUProbe.swift          # 编排：环境发现、两族并发探测、退出码
+    ├── CLIOptions.swift        # 参数解析与校验
+    └── ResultRenderer.swift    # human / json / tsv / value 输出
+Tests/
+└── MTUProbeCoreTests/          # 29 个单元测试：搜索算法、报文构造 / 解析、区间不变量、协议族常量
 ```
 
 ## 注意事项
